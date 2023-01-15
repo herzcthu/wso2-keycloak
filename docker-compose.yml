@@ -1,0 +1,134 @@
+services:
+  wso2-setup:
+    image: herzcthu/wso2-community:latest
+    volumes:
+      - ./scripts:/scripts
+      - ./data/certs:/certs
+      - ./data/dbscripts/:/dbscripts/
+      - ./data/wso2conf:/wso2conf
+    entrypoint: /scripts/wso2-setup.sh
+  wso2-config:
+    image: herzcthu/toml-cli:alpine
+    volumes:
+      - ./scripts:/scripts
+      - ./data/wso2conf:/wso2conf
+    entrypoint: /scripts/wso2-config.sh
+    environment:
+      DOMAINNAME: api.domain.local
+      APIDB_USER: apimadmin
+      APIDB_PASSWORD: apiadmindbpass
+      WSO2ADMIN_USER: wso2admin
+      WSO2ADMIN_PASSWORD: wso2admin
+    depends_on:
+      - wso2-setup
+  keytool:
+    image: joostdecock/keytool
+    volumes:
+      - ./scripts:/scripts
+      - ./data/certs:/certs
+    entrypoint: /scripts/keytool-entrypoint.sh
+  postgres:
+    image: postgres
+    restart: always
+    ports:
+      - "5432:5432"
+    volumes:
+      - logvolume01:/var/log
+      - ./data/pgdata:/var/lib/postgresql/data
+      - ./data/pgsql-scripts:/docker-entrypoint-initdb.d/
+      - ./data/dbscripts:/dbscripts
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 20000
+        hard: 40000
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: change_me
+      POSTGRES_DB: keycloak
+      PGDATA: /var/lib/postgresql/data/pgdata
+      APIDB_USER: apimadmin
+      APIDB_PASSWORD: jw8s0F4
+      CTDB_USER: ctadmin
+      CTDB_PASSWORD: ctadmin
+    depends_on:
+      - wso2-setup
+    healthcheck:
+      test: ["CMD", "psql", "-U", "admin", "-c", "SELECT 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - backend
+  wso2:
+    image: herzcthu/wso2-community:latest
+    restart: always
+    entrypoint: ["/scripts/start-wso2.sh", "60"]
+    ports:
+      - "8243:8243"
+      - "9443:9443"
+    volumes:
+      - logvolume01:/var/log
+      - ./scripts:/scripts
+      - ./data/certs/client-truststore.jks:/opt/wso2am/repository/resources/security/client-truststore.jks
+      - ./data/wso2conf/deployment.toml:/opt/wso2am/repository/conf/deployment.toml
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 20000
+        hard: 40000
+    environment:
+      DOMAINNAME: api.domain.local
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: change_me
+      POSTGRES_DB: keycloak
+    depends_on:
+      - keytool
+      - wso2-setup
+      - wso2-config
+      - postgres
+    domainname: api.domain.local
+    hostname: api.domain.local
+    networks:
+      backend:
+        aliases:
+          - wso2
+          - api.domain.local
+  keycloak:
+    image: quay.io/keycloak/keycloak:latest
+    restart: always
+    ports:
+      - "8080:8080"
+      - "8443:8443"
+    entrypoint: [ "/scripts/start-keycloak.sh", "30", "--hostname", "sso.domain.local"]
+    volumes:
+      - logvolume01:/var/log
+      - ./scripts:/scripts
+      - ./data/certs/server.keystore:/opt/keycloak/conf/server.keystore
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 20000
+        hard: 40000
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres/keycloak
+      KC_DB_USERNAME: admin
+      KC_DB_PASSWORD: change_me
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: change_me
+    domainname: sso.domain.local
+    hostname: sso.domain.local
+    networks:
+      backend:
+        aliases:
+          - keycloak
+          - sso.domain.local
+
+volumes:
+  logvolume01: {}
+
+networks:
+  backend:
+    driver: bridge
